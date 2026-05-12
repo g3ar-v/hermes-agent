@@ -860,6 +860,14 @@ DEFAULT_CONFIG = {
             "timeout": 30,
             "extra_body": {},
         },
+        "tts_preprocess": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 15,
+            "extra_body": {},
+        },
         "title_generation": {
             "provider": "auto",
             "model": "",
@@ -1038,6 +1046,8 @@ DEFAULT_CONFIG = {
         "beep_enabled": True,         # Play record start/stop beeps in CLI voice mode
         "silence_threshold": 200,     # RMS below this = silence (0-32767)
         "silence_duration": 3.0,      # Seconds of silence before auto-stop
+        "tts_summarize": "off",       # "off", "llm", or "heuristic"
+        "tts_max_len": 4000,
     },
     
     "human_delay": {
