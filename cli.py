@@ -2635,6 +2635,7 @@ class HermesCLI:
         self._voice_processing = False
         self._voice_continuous = False
         self._voice_tts_done = threading.Event()
+        self._voice_tts_summarize = "off"   # Summarize responses before TTS
         self._voice_tts_done.set()
 
         # Status bar visibility (toggled via /statusbar)
@@ -9555,9 +9556,27 @@ class HermesCLI:
         try:
             from tools.tts_tool import text_to_speech_tool
             from tools.voice_mode import play_audio_file
+            from agent.tts_preprocessor import preprocess_for_tts
+
+            # Read session-level summarize mode, fall back to config default
+            summarize_mode = getattr(self, "_voice_tts_summarize", "off")
+
+            # Read max_len from config
+            try:
+                from hermes_cli.config import load_config
+                voice_cfg = load_config().get("voice", {})
+                max_len = voice_cfg.get("tts_max_len", 4000) if isinstance(voice_cfg, dict) else 4000
+            except Exception:
+                max_len = 4000
+
+            # Pre-process: summarize if summarizer is enabled
+            tts_text = preprocess_for_tts(
+                text,
+                mode=summarize_mode,
+                max_len=max_len,
+            )
 
             # Strip markdown and non-speech content for cleaner TTS
-            tts_text = text[:4000] if len(text) > 4000 else text
             tts_text = re.sub(r'```[\s\S]*?```', ' ', tts_text)   # fenced code blocks
             tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)  # [text](url) -> text
             tts_text = re.sub(r'https?://\S+', '', tts_text)      # URLs
@@ -9600,9 +9619,9 @@ class HermesCLI:
             self._voice_tts_done.set()
 
     def _handle_voice_command(self, command: str):
-        """Handle /voice [on|off|tts|status] command."""
-        parts = command.strip().split(maxsplit=1)
-        subcommand = parts[1].lower().strip() if len(parts) > 1 else ""
+        """Handle /voice [on|off|tts|status|summarize] command."""
+        parts = command.strip().split()
+        subcommand = parts[1].lower() if len(parts) > 1 else ""
 
         if subcommand == "on":
             self._enable_voice_mode()
@@ -9612,6 +9631,9 @@ class HermesCLI:
             self._toggle_voice_tts()
         elif subcommand == "status":
             self._show_voice_status()
+        elif subcommand == "summarize":
+            mode = parts[2].lower() if len(parts) > 2 else "off"
+            self._set_voice_tts_summarize(mode)
         elif subcommand == "":
             # Toggle
             if self._voice_mode:
@@ -9620,7 +9642,7 @@ class HermesCLI:
                 self._enable_voice_mode()
         else:
             _cprint(f"Unknown voice subcommand: {subcommand}")
-            _cprint("Usage: /voice [on|off|tts|status]")
+            _cprint("Usage: /voice [on|off|tts|status|summarize]")
 
     def _voice_beeps_enabled(self) -> bool:
         """Return whether CLI voice mode should play record start/stop beeps."""
@@ -9742,15 +9764,41 @@ class HermesCLI:
 
         _cprint(f"{_ACCENT}Voice TTS {status}.{_RST}")
 
+    def _set_voice_tts_summarize(self, mode: str):
+        """Set the TTS summarization mode for the current session.
+
+        ``mode`` must be ``"off"``, ``"llm"``, or ``"heuristic"``.
+        """
+        valid = ("off", "llm", "heuristic")
+        if mode not in valid:
+            _cprint(f"{_DIM}Invalid summarize mode. Use: {', '.join(valid)}{_RST}")
+            return
+
+        try:
+            from hermes_cli.config import load_config
+            cfg = load_config()
+            voice_cfg = cfg.get("voice", {}) if isinstance(cfg.get("voice"), dict) else {}
+        except Exception:
+            voice_cfg = {}
+
+        # Session attribute — read by _voice_speak_response
+        with self._voice_lock:
+            self._voice_tts_summarize = mode
+
+        _cprint(f"{_ACCENT}TTS summarizer set to: {mode}.{_RST}")
+
     def _show_voice_status(self):
         """Show current voice mode status."""
         from tools.voice_mode import check_voice_requirements
 
         reqs = check_voice_requirements()
 
+        summarize_mode = getattr(self, "_voice_tts_summarize", "off")
+
         _cprint(f"\n{_BOLD}Voice Mode Status{_RST}")
         _cprint(f"  Mode:      {'ON' if self._voice_mode else 'OFF'}")
         _cprint(f"  TTS:       {'ON' if self._voice_tts else 'OFF'}")
+        _cprint(f"  Summarize: {summarize_mode}")
         _cprint(f"  Recording: {'YES' if self._voice_recording else 'no'}")
         # Display the startup-pinned label so /voice status always
         # matches the live prompt_toolkit binding (Copilot round-14 on
@@ -11197,6 +11245,7 @@ class HermesCLI:
         self._voice_recording = False   # Whether currently recording
         self._voice_processing = False  # Whether STT is in progress
         self._voice_continuous = False  # Whether to auto-restart after agent responds
+        self._voice_tts_summarize = "off"   # Summarize responses before TTS
         self._voice_tts_done = threading.Event()  # Signals TTS playback finished
         self._voice_tts_done.set()  # Initially "done" (no TTS pending)
 
