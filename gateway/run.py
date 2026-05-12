@@ -9937,8 +9937,28 @@ class GatewayRunner:
         actual_path = None
         try:
             from tools.tts_tool import text_to_speech_tool, _strip_markdown_for_tts
+            from agent.tts_preprocessor import preprocess_for_tts
 
-            tts_text = _strip_markdown_for_tts(text[:4000])
+            # Read summarizer mode from global config
+            try:
+                from hermes_cli.config import _DEFAULT_CONFIG, load_config_from_dir, get_hermes_home
+                import yaml
+                _home = get_hermes_home()
+                _cfg_path = os.path.join(_home, "config.yaml")
+                _raw = {}
+                if os.path.isfile(_cfg_path):
+                    with open(_cfg_path) as _f:
+                        _raw = yaml.safe_load(_f) or {}
+                voice_cfg = _raw.get("voice", {}) if isinstance(_raw.get("voice"), dict) else {}
+            except Exception:
+                voice_cfg = {}
+
+            summarize_mode = voice_cfg.get("tts_summarize", "off")
+            max_len = voice_cfg.get("tts_max_len", 4000)
+
+            # Pre-process: summarize if summarizer is enabled
+            tts_text = preprocess_for_tts(text, mode=summarize_mode, max_len=max_len)
+            tts_text = _strip_markdown_for_tts(tts_text)
             if not tts_text:
                 return
 
