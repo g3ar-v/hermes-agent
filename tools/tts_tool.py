@@ -1536,11 +1536,25 @@ def _default_neutts_ref_text() -> str:
     return str(Path(__file__).parent / "neutts_samples" / "jo.txt")
 
 
+def _convert_wav(wav_path: str, output_path: str) -> None:
+    """Convert a WAV file to the caller's desired format (mp3/ogg)."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        conv_cmd = [ffmpeg, "-i", wav_path, "-y", "-loglevel", "error", output_path]
+        subprocess.run(conv_cmd, check=True, timeout=30)
+        os.remove(wav_path)
+    else:
+        # No ffmpeg — just rename the WAV to the expected path
+        os.rename(wav_path, output_path)
+
+
 def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
     """Generate speech using the local NeuTTS engine.
 
-    Runs synthesis in a subprocess via tools/neutts_synth.py to keep the
-    ~500MB model in a separate process that exits after synthesis.
+    Tries a persistent ``neutts_daemon`` process via ``neutts_client`` first.
+    The daemon keeps the ~500MB model loaded in memory and exits after an
+    idle timeout (default 300 s).  Falls back to the one-shot
+    ``neutts_synth.py`` subprocess if the daemon is unavailable.
     Outputs WAV; the caller handles conversion for Telegram if needed.
     """
     import sys
@@ -1550,6 +1564,9 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
     ref_text = neutts_config.get("ref_text", "") or _default_neutts_ref_text()
     model = neutts_config.get("model", "neuphonic/neutts-air-q4-gguf")
     device = neutts_config.get("device", "cpu")
+    timeout = tts_config.get("timeout", tts_config.get("timeout_seconds", 120))
+    socket_path = neutts_config.get("socket_path", "/tmp/neutts_daemon.sock")
+    daemon_idle_timeout = neutts_config.get("daemon_idle_timeout", 300)
 
     # NeuTTS outputs WAV natively — use a .wav path for generation,
     # let the caller convert to the final format afterward.
@@ -1557,6 +1574,33 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
     if not output_path.endswith(".wav"):
         wav_path = output_path.rsplit(".", 1)[0] + ".wav"
 
+    # --- attempt persistent daemon first ---
+    try:
+        from tools.neutts_client import synthesize_via_daemon
+        logger = logging.getLogger(__name__)
+        logger.info("NeuTTS: trying persistent daemon at %s", socket_path)
+        ok = synthesize_via_daemon(
+            text=text,
+            out=wav_path,
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            model=model,
+            device=device,
+            socket_path=socket_path,
+            daemon_idle_timeout=float(daemon_idle_timeout),
+            request_timeout=float(timeout),
+        )
+        if ok:
+            # wav_path written by the daemon — continue to format conversion
+            if wav_path != output_path:
+                _convert_wav(wav_path, output_path)
+            return output_path
+        logger.warning("NeuTTS daemon synthesis failed — falling back to one-shot subprocess.")
+    except Exception as exc:
+        logger = logging.getLogger(__name__)
+        logger.warning("NeuTTS daemon unavailable (%s) — falling back to one-shot subprocess.", exc)
+
+    # --- fallback: one-shot subprocess (legacy) ---
     synth_script = str(Path(__file__).parent / "neutts_synth.py")
     cmd = [
         sys.executable, synth_script,
@@ -1568,7 +1612,7 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
         "--device", device,
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=float(timeout))
     if result.returncode != 0:
         stderr = result.stderr.strip()
         # Filter out the "OK:" line from stderr
@@ -1577,14 +1621,7 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
 
     # If the caller wanted .mp3 or .ogg, convert from WAV
     if wav_path != output_path:
-        ffmpeg = shutil.which("ffmpeg")
-        if ffmpeg:
-            conv_cmd = [ffmpeg, "-i", wav_path, "-y", "-loglevel", "error", output_path]
-            subprocess.run(conv_cmd, check=True, timeout=30)
-            os.remove(wav_path)
-        else:
-            # No ffmpeg — just rename the WAV to the expected path
-            os.rename(wav_path, output_path)
+        _convert_wav(wav_path, output_path)
 
     return output_path
 
