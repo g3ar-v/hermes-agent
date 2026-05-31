@@ -781,7 +781,34 @@ def speak_text(text: str) -> None:
     try:
         from tools.tts_tool import text_to_speech_tool
 
-        tts_text = text[:4000] if len(text) > 4000 else text
+        # ── TTS summarizer (config-driven) ──────────────────────────────
+        # When voice.tts_summarize is "llm" or "heuristic", run the
+        # response through the preprocessor *before* markdown stripping
+        # so the LLM sees clean text and the TTS gets a concise summary.
+        tts_mode = "off"
+        tts_max_len = 4000
+        preprocess_fn = None
+        try:
+            from hermes_cli.config import load_config
+            _voice_cfg = load_config().get("voice", {})
+            if isinstance(_voice_cfg, dict):
+                tts_mode = _voice_cfg.get("tts_summarize", "off")
+                tts_max_len = int(_voice_cfg.get("tts_max_len", 4000) or 4000)
+        except Exception:
+            pass  # malformed config — fall through to raw behaviour
+        if tts_mode != "off":
+            try:
+                from agent.tts_preprocessor import preprocess_for_tts
+                preprocess_fn = preprocess_for_tts
+            except ImportError:
+                logger.warning("TTS preprocessor not available; using raw text")
+        if preprocess_fn is not None:
+            try:
+                text = preprocess_fn(text, mode=tts_mode, max_len=tts_max_len)
+            except Exception as e:
+                logger.warning("TTS preprocessing failed: %s; falling back to raw text", e)
+
+        tts_text = text[:tts_max_len] if len(text) > tts_max_len else text
         tts_text = re.sub(r'```[\s\S]*?```', ' ', tts_text)             # fenced code blocks
         tts_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', tts_text)    # [text](url) → text
         tts_text = re.sub(r'https?://\S+', '', tts_text)                # bare URLs

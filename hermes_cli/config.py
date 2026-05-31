@@ -1029,6 +1029,14 @@ DEFAULT_CONFIG = {
             "timeout": 30,
             "extra_body": {},
         },
+        "tts_preprocess": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 15,
+            "extra_body": {},
+        },
         # Triage specifier — flesh out a rough one-liner in the Kanban
         # Triage column into a concrete spec, then promote it to ``todo``.
         # Invoked by ``hermes kanban specify`` (single id or --all). Set a
@@ -1298,6 +1306,9 @@ DEFAULT_CONFIG = {
         "beep_enabled": True,         # Play record start/stop beeps in CLI voice mode
         "silence_threshold": 200,     # RMS below this = silence (0-32767)
         "silence_duration": 3.0,      # Seconds of silence before auto-stop
+        "progress_tts": False,        # Speak intermediate progress messages during agent turns
+        "tts_summarize": "off",       # "off" | "llm" | "heuristic" — summarize final response before TTS
+        "tts_max_len": 4000,          # Max chars to feed the TTS preprocessor
     },
     
     "human_delay": {
